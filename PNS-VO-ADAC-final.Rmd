@@ -1,0 +1,448 @@
+---
+title: Correlação entre Violência Obstétrica, Cor ou Raça e presença de acompanhante
+  durante o parto. A partir dos dados da PNS 2019
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_collapsed: yes
+    toc_depth: 2
+    number_sections: no
+    theme: lumen
+---
+# preparando o ambiente
+Atualiza o diretório de trabalho
+```{r eval=FALSE}
+setwd('Desktop/PNS/adac-PNS')
+options(OutDec=",") 
+```
+Carrega pacotes
+```{r, results='hide', warning=FALSE, message=FALSE}
+library(survey)
+library(ggplot2)
+library(dplyr)
+library(tictoc)
+library(foreign)
+library(forcats)
+library(tidyverse)
+library(kableExtra)
+```
+
+Carrega microdados em formato rdata disponibilizados no site da Fiocruz e confere propriedades
+```{r}
+load("pns2019.rdata")
+dim(pns2019)
+class(pns2019) 
+```
+
+# Aplica desenho da pesquisa. 
+
+## Método do pacote PNSIBGE para declarar o desenho amostral da PNS para morador selecionado
+
+#### Filtra os moradores selecionados  
+Retira as seguintes variáveis do df: 
+* Peso do domicílio e dos moradores sem calibração
+* Peso do domicílio e dos moradores com calibração
+* Projeção da população
+* Domínio de projeção para domicílio e moradores
+* Peso do morador selecionado para antropometria sem calibração
+* Peso do morador selecionado para antropometria com calibração
+* Projeção da população para moradores selecionados para antropometria e
+* Domínio de projeção para morador selecionado para antropometria
+
+```{r}
+pns2019 <- pns2019[(pns2019$M001 == "1" & !is.na(pns2019$M001)),]
+
+pns2019 <- pns2019[,!(names(pns2019) %in% c("V0028", "V00281", "V00282", "V00283", "V0030", "V00301", "V00302", "V00303"))]
+
+```
+
+
+## Informa os argumentos necessários sobre o desenho amostral.
+
+- id = UPA
+- strata = Estrato
+- weights = Peso (Original). Peso do morador selecionado *sem* calibração.
+- nest = TRUE - Permitir códigos de UPAs iguais para estratos diferentes.
+
+```{r}
+pns2019.SelDesign = svydesign(ids = ~UPA_PNS, 
+                    strata = ~V0024, 
+                    data = pns2019, 
+                    weights = ~V0029, 
+                    nest = TRUE)
+```
+
+### Calibração: Pós estratificação
+
+Cria dataframe com os pós estratos e a população dos pós estratos.
+
+```{r}
+popc.types <- data.frame(V00293=as.character(unique(pns2019$V00293)), Freq=as.numeric(unique(pns2019$V00292)))
+popc.types <- popc.types[order(popc.types$V00293),]
+```
+- V00293: Domínio de projeção para morador selecionado
+-V00292: Projeção da população para moradores selecionados
+
+- popc.types será um df do parametro: 'frequencias da população' para o design com calibração através do poststratify.
+- Seleciona os valores únicos na V00293	(Domínio de projeção para morador selecionado->Domínio de projeção para morador selecionado - Só aplicável para domicílios com entrevista realizada para morador selecionado) e os valores únicos.
+- As frequencias (Freq) são os valores únicos retiradas da variável V00292	(Projeção da população para moradores selecionados-> Projeção da população obtida com os dados dos moradores dos domicílios da pesquisa - Só aplicável para domicílios com entrevista realizada para morador selecionado)
+- Em seguida é criado um df que é ordenado pelo "Domínio de projeção para morador selecionado"
+
+
+### Atualiza o desenho com a pós estratatificação
+
+```{r}
+desenho_pos <- postStratify(design=pns2019.SelDesign, 
+                            strata=~V00293, 
+                            population=popc.types)
+```
+* nota: Se os pesos de amostragem já foram pós-estratificados, não haverá mudança nos estimadores pontuais após a postStratify, mas as estimativas do erro padrão diminuirão para refletir corretamente a pós-estratificação.
+
+10 elementos: 
+* cluster
+* strata
+* has.strata
+* prop
+* allprob
+* call
+* variables
+* fpc
+* pps
+* *postStrata*
+
+
+# Análise proposta
+
+A *população de interesse* é composta das mulheres brasileiras selecionadas de 15 a 49 anos que responderam ao módulo S - pré-natal da PNS de 2019, ou seja, que tinham pelo menos um *filho com até dois anos* de idade na data da entrevista e entraram em trabalho de parto, ou seja, responderam aos quesitos S119,S120,S121 (se a mulher teve parto cesaria e não entrou em trabalho de parto ela não responde as perguntas S119, S120, S121 e S122). Será realizado o teste de homogêneidade, apropriado para estudar a igualdade das distribuições condicionais de uma variável resposta categórica, violência obstétrica e variaveis preditoras também categóricas, cor ou raça e "ter ou não acompanhante". 
+
+• A *Variável resposta*: Incidência de Violência Obstétrica.
+– É considerado violência obstétrica para com a mulheres selecionada: 
+  - Neste parto fizeram na Sra a episiotomia (aquele corte na vagina)?
+(S119 = sim) 
+  ou 
+  -Neste trabalho de parto foi oferecido algum método para alívio da dor?
+ (S120 = não)
+ e
+  -Neste trabalho de parto foi utilizado algum método para alívio da dor?
+ (S121 = não)
+
+• *Variáveis preditoras*:
+– Cor ou raça (Branco como baseline - C009)
+– Presença de acompanhante no parto [Alguém conhecido ficou com você durante todo o período de parto (pré-parto, parto e pós-parto)? - S123]
+
+• *Hipótese nula H0-1*:
+  - A distribuição dos dados é homogênea na relação entre as variáveis violência obstétrica e cor ou raça.
+  
+• *Hipótese alternativa H1-1*:
+  - A distribuição é heterogênea, ou seja, existe uma correlação com significancia estatística entre a Violência obstétrica e cor ou raça.
+
+• *Hipótese nula H0-2*:
+  - A distribuição dos dados é homogênea na relação entre as variáveis Violência obstétrica e ter ou não acompanhante durante o trabalho de parto.
+  
+• *Hipótese alternativa H1-2*:
+  - A distribuição é heterogênea, ou seja, existe uma correlação com significancia estatística entre a Violência obstétrica e ter ou não acompanhante durante o trabalho de parto.
+
+# preparando as variáveis
+
+#### Retirando ignorados 
+
+```{r}
+desenho_pos = update(desenho_pos,
+                     C009 = na_if(C009, 9),
+                     S119 = na_if(S119, 9),
+                     S120 = na_if(S120, 9),
+                     S121 = na_if(S121, 9),
+                     S123 = na_if(S123, 9)
+)
+```
+
+#### Criação da variável CorRaca binária para brancos e não brancos
+```{r}
+desenho_pos <- update(desenho_pos,
+                      CorRaca = ifelse(C009==1,1,0))
+```
+*CorRaca:* 1 == Branca, 0 == Não Branca
+
+#### Atualizando as variáveis para fator (fixa como categórica) e adiciona marcadores
+```{r}
+desenho_pos = update(desenho_pos ,
+                     S119 = factor(S119, labels = c("sim", "não")),
+                     S120 = factor(S120, labels = c("sim", "não")),
+                     S121 = factor(S121, labels = c("sim", "não")),
+                     Acompanhada = factor(S123, labels = c("sim", "não")),
+                     CorRaca = factor(CorRaca, labels = c( "Não-Branca", "Branca")),
+                     um = 1
+                     
+)
+```
+• um -> Cria variável auxiliar para os cálculos no objeto survey
+
+
+
+#### VO - Se foi feita a episiotomia na mulher ou se não foi oferecido algum método para alívio da dor no trabalho de parto e não foi utilizado algum método para alívio da dor, será contabilizado que a mulher foi vítima de violência obstétrica:
+
+```{r}
+desenho_pos <- update(desenho_pos,
+                      VO = ifelse(S119=="sim" | (S120=="não" & S121=="não"),1,0))
+desenho_pos <- update(desenho_pos,
+                      VO = factor(VO, labels= c("não", "sim")))
+```
+*VO:* 1 == sofreu VO
+
+# Estatísticas Descritivas:
+
+#### Total de mulheres que responderam a S119 (fizeram a episiotomia?)
+```{r}
+TOT_episiotomia = svytotal(~S119, desenho_pos, na.rm = TRUE, deff=TRUE)
+cv_TOT_episiotomia = cv(TOT_episiotomia)*100
+IC_TOT_episiotomia = confint(TOT_episiotomia)
+
+TOT_episiotomia = cbind(as.data.frame(TOT_episiotomia),
+                        as.data.frame(cv_TOT_episiotomia),
+                        as.data.frame(IC_TOT_episiotomia))
+write.csv(TOT_episiotomia, 
+          file="Total de mulheres que responderam SIM ou NÃO para a S119 (fizeram a episiotomia?)")
+```
+
+#### Proporção de mulheres que responderam SIM ou NÃO para a S119 (fizeram a episiotomia?)
+```{r}
+PROP_episiotomia = svymean(~S119,desenho_pos,na.rm = TRUE)
+cv_PROP_episiotomia = cv(PROP_episiotomia)*100
+IC_PROP_episiotomia = confint(PROP_episiotomia)
+
+PROP_episiotomia = cbind(as.data.frame(PROP_episiotomia),
+                         as.data.frame(cv_PROP_episiotomia),
+                         as.data.frame(IC_PROP_episiotomia))
+write.csv(PROP_episiotomia, file = "Proporção de mulheres que responderam SIM ou NÃO para S119(fizeram a episiotomia?)")
+
+```
+#### Total de mulheres que responderam a S120 (foi oferecido algum método para alívio da dor no trabalho de parto?)
+```{r}
+TOT_ofereceu_alivio = svytotal(~S120, desenho_pos, na.rm = TRUE, deff=TRUE)
+cv_TOT_ofereceu_alivio = cv(TOT_ofereceu_alivio)*100
+IC_TOT_ofereceu_alivio = confint(TOT_ofereceu_alivio)
+
+
+TOT_ofereceu_alivio = cbind(as.data.frame(TOT_ofereceu_alivio),
+                        as.data.frame(cv_TOT_ofereceu_alivio),
+                        as.data.frame(IC_TOT_ofereceu_alivio))
+write.csv(TOT_ofereceu_alivio, file = "Total de mulheres que responderam a S120 (foi oferecido algum método para alívio da dor no trabalho de parto?)")
+```
+#### Proporção de mulheres que responderam SIM ou NÃO para a S120 (foi oferecido algum método para alívio da dor no trabalho de parto?)
+
+```{r}
+PROP_ofereceu_alivio <- svymean(~S120,desenho_pos,na.rm = TRUE)
+cv_PROP_ofereceu_alivio = cv(PROP_ofereceu_alivio)*100
+IC_PROP_ofereceu_alivio = confint(PROP_ofereceu_alivio)
+
+PROP_ofereceu_alivio = cbind(as.data.frame(PROP_ofereceu_alivio),
+                        as.data.frame(cv_PROP_ofereceu_alivio),
+                        as.data.frame(IC_PROP_ofereceu_alivio))
+write.csv(PROP_ofereceu_alivio, file = "Proporção de mulheres que responderam SIM ou NÃO para a S120 (foi oferecido algum método para alívio da dor no trabalho de parto?)")
+```
+
+#### Proporção de mulheres que responderam SIM ou NÃO para a S121 (Neste trabalho de parto foi utilizado algum método para alívio da dor?)
+
+```{r}
+PROP_recebeu_alivio <- svymean(~S121,desenho_pos,na.rm = TRUE)
+cv_PROP_recebeu_alivio = cv(PROP_recebeu_alivio)*100
+IC_PROP_recebeu_alivio = confint(PROP_recebeu_alivio)
+
+PROP_recebeu_alivio = cbind(as.data.frame(PROP_recebeu_alivio),as.data.frame(cv_PROP_recebeu_alivio),as.data.frame(IC_PROP_recebeu_alivio))
+write.csv(PROP_recebeu_alivio, file = "Proporção de mulheres que responderam SIM ou NÃO para a S121 (Neste trabalho de parto foi utilizado algum método para alívio da dor?)")
+```
+
+#### Total e proporção das mulheres que sofreram Violência Obstétrica, Intervalo de confiança das estimativas e o efeito do plano amostral.
+```{r}
+TOT_VO <- svytotal(~VO, desenho_pos, na.rm = TRUE, deff=TRUE)
+CV_TOT_VO = cv(TOT_VO)*100
+IC_TOT_VO = confint(TOT_VO)
+
+
+PROP_VO <- svymean(~VO, desenho_pos, na.rm = TRUE, deff=TRUE)
+CV_PROP_VO = cv(PROP_VO)*100
+IC_PROP_VO = confint(PROP_VO)
+
+TOT_VO = cbind(as.data.frame(TOT_VO),as.data.frame(CV_TOT_VO),as.data.frame(IC_TOT_VO))
+PROP_VO = cbind(as.data.frame(PROP_VO),as.data.frame(CV_PROP_VO),as.data.frame(IC_PROP_VO))
+VO = cbind(TOT_VO,PROP_VO)
+
+write.csv(VO, file = "VO_descritivo")
+```
+
+#### Proporção de mulheres que tiveram a presença de acompanhante no parto(S123): 
+```{r}
+TOT_acompanhadas_parto <-svytotal(~Acompanhada,desenho_pos,na.rm = TRUE, deff=TRUE)
+CV_TOT_acompanhadas_parto =cv(TOT_acompanhadas_parto)*100 
+IC_TOT_acompanhadas_parto = confint(TOT_acompanhadas_parto)
+
+PROP_acompanhadas_parto <- svymean(~Acompanhada,desenho_pos,na.rm = TRUE, deff=TRUE)
+CV_PROP_acompanhadas_parto= cv(PROP_acompanhadas_parto)*100
+IC_PROP_acompanhadas_parto = confint(PROP_acompanhadas_parto)
+
+TOT_acompanhadas_parto  = cbind(as.data.frame(TOT_acompanhadas_parto ),as.data.frame(CV_TOT_acompanhadas_parto ),as.data.frame(IC_TOT_acompanhadas_parto ))
+PROP_acompanhadas_parto = cbind(as.data.frame(PROP_acompanhadas_parto),as.data.frame(CV_PROP_acompanhadas_parto),as.data.frame(IC_PROP_acompanhadas_parto))
+acompanhadas_parto = cbind(TOT_acompanhadas_parto ,PROP_acompanhadas_parto)
+
+write.csv(acompanhadas_parto, file = "acompanhadas_descritivo")
+```
+
+#### Variável criada, CorRaca:
+```{r}
+TOTcor <- svytotal(~CorRaca, desenho_pos, na.rm = TRUE, deff=TRUE)
+CV_TOTcor = cv(TOTcor)*100
+IC_TOTcor= confint(TOTcor)
+
+PROPcor <- svymean(~CorRaca, desenho_pos, na.rm = TRUE, deff=TRUE)
+CV_PROPcor = cv(PROPcor)*100
+IC_PROPcor= confint(PROPcor)
+
+TOTcor = cbind(as.data.frame(TOTcor),as.data.frame(CV_TOTcor),as.data.frame(IC_TOTcor))
+PROPcor = cbind(as.data.frame(PROPcor),as.data.frame(CV_PROPcor),as.data.frame(IC_PROPcor))
+CorRaca = cbind(TOTcor,PROPcor)
+
+write.csv(CorRaca, file = "CorRaca_branca-nbranca")
+```
+
+# Testes de hipótese
+
+### Tabulando:
+[Usando {survey} para criar uma tabela das proporções ponderadas](https://zacharylhertz.github.io/posts/2021/06/survey-package):
+
+prop.table - Retorna proporções condicionais dadas margens, ou seja, entradas de x, divididas pelas somas marginais apropriadas
+
+
+```{r}
+estatisticas_descritivas_variaveis <- svytable(~VO + Acompanhada + CorRaca, 
+                     design=desenho_pos) %>%
+  prop.table() %>%
+  magrittr::multiply_by(100) %>%  
+  round(digits=1) %>%
+  as.data.frame()
+
+estatisticas_descritivas_variaveis
+write.csv(estatisticas_descritivas_variaveis, file="frequencias")
+```
+
+## Tabelas de contingência
+
+### Cruzando Violência Obstétrica e "Cor ou raça":
+
+#### Tabela com proporções e com o coeficiente de variação percentual das estimativas (VO vs CorRaca): 
+```{r}
+prop_corRaca_vs_VO = svyby(~VO, by=~CorRaca,desenho_pos, svymean, na.rm= TRUE, vartype = c("cvpct","ci"))
+prop_corRaca_vs_VO 
+write.csv(prop_corRaca_vs_VO, file="Tabela de contingência para teste de homogeneidade, com o coeficiente de variação percentual das estimativas e limites superior e inferior (VO vs CorRaca)")
+```
+
+
+###  Cruzando Violência Obstétrica e "mulher acompanhada":
+
+#### Tabela com proporções e com o coeficiente de variação percentual das estimativas (VO vs mulher acompanhada): 
+```{r}
+prop_Acompanhada_vs_VO =svyby(~VO, by=~Acompanhada,desenho_pos, svymean, na.rm= TRUE, vartype = c("cvpct","ci"))
+
+write.csv(prop_Acompanhada_vs_VO, file="Tabela de contingência para teste de homogeneidade e com o coeficiente de variação percentual das estimativas e limites superior e inferior (VO vs mulher acompanhada)")
+```
+
+
+
+### Teste 1:
+• *Hipótese nula H0-1*:
+  - A distribuição dos dados é homogênea na relação entre as variáveis Violência obstétrica e cor ou raça e em relação.
+  
+• *Hipótese alternativa H1-1*:
+  - A distribuição é heterogênea, ou seja, existe uma correlação com significancia estatística entre a Violência obstétrica e cor ou raça.
+
+###  Teste Chi-quadrado ponderado pelo pesos VO(Y) + CorRaca(X):
+#### Proporções nas celas
+```{r}
+Proporções_nas_celas_CR_VO <- svytable(~CorRaca+VO, desenho_pos, Ntotal = 100)
+Proporções_nas_celas_CR_VO
+```
+
+#### Teste de associação qui-quadrado : 
+
+```{r, eval=TRUE}
+F1 <- svychisq(~CorRaca+VO, desenho_pos, statistic="F",na.rm=TRUE)
+X21 <- svychisq(~CorRaca+VO, desenho_pos, statistic="Chisq",na.rm=TRUE)
+WALD1 <- svychisq(~CorRaca+VO, desenho_pos, statistic="Wald", na.rm=TRUE)
+
+results <- data.frame(
+  Metodo= c("F","Chisq","Wald"),
+  Estatistica= c(F1$statistic,X21$statistic, WALD1$statistic),
+  Valorp = c(F1$p.value, X21$p.value, WALD1$p.value ))
+kable(results,digits= 3)
+write.csv(results, file="Teste de homogeneidade- CorRaca vs VO")
+```
+
+Resultado: Com o p-value = 0,410 (teste F), p-value = 0,410 (teste X2) e p-value = 0,413 (teste Wald). Aceitamos a hipótese Nula de que as variáveis categóricas Violência obstétrica e cor ou raça são distribuidas homogêneamente. Ou seja, não há significância estatística que indica uma associação.
+
+### Teste 2:
+• *Hipótese nula H0-2*:
+  - A distribuição dos dados é homogênea na relação entre as variáveis Violência obstétrica e em relação a ter ou não acompanhante.
+  
+• *Hipótese alternativa H1-2*:
+  - A distribuição é heterogênea, ou seja, existe uma correlação com significancia estatística entre a Violência obstétrica e em relação a ter ou não acompanhante(S123).
+
+###  Teste Chi-quadrado ponderado pelo pesos VO(Y) + S123(X):
+
+#### Proporções nas celas
+```{r}
+Proporções_nas_celas_Acomp_VO <- svytable(~Acompanhada+VO, desenho_pos, Ntotal = 100)
+Proporções_nas_celas_Acomp_VO
+```
+
+#### Teste de associação qui-quadrado : 
+
+```{r}
+F2 <- svychisq(~Acompanhada+VO, desenho_pos, statistic="F")
+X22 <- svychisq(~Acompanhada+VO, desenho_pos, statistic="Chisq")
+WALD2 <- svychisq(~Acompanhada+VO, desenho_pos, statistic="Wald")
+
+results2 <- data.frame(
+  Metodo= c("F","Chisq","Wald"),
+  Estatistica= c(F2$statistic,X22$statistic, WALD2$statistic),
+  Valorp = c(F2$p.value, X22$p.value, WALD2$p.value ))
+kable(results2 ,digits= 3)
+write.csv(results2, file="Teste de homogeneidade- Acompanhada vs VO")
+```
+
+Resultado: Com o p-value = 0,939 (teste F), p-value = 0,939 (teste X2) e p-value = 0,939 (teste Wald). Aceitamos a hipótese Nula de que as variáveis categóricas Violência obstétrica e "em relação a ter ou não acompanhante" são distribuidas homogêneamente. Ou seja, não há significância estatística que indica uma associação entre as variáveis.
+
+
+#### Testes adicionais com a S119 (episiotomia (Y) e as duas variáveis (X) categoricas)
+```{r}
+F3 <- svychisq(~CorRaca+S119, desenho_pos, statistic="F")
+X23 <- svychisq(~CorRaca+S119, desenho_pos, statistic="Chisq")
+WALD3 <- svychisq(~CorRaca+S119, desenho_pos, statistic="Wald")
+
+
+results3 <- data.frame(
+  Metodo= c("F","Chisq","Wald"),
+  Estatistica= c(F2$statistic,X22$statistic, WALD2$statistic),
+  Valorp = c(F3$p.value, X23$p.value, WALD3$p.value ))
+kable(results3 ,digits= 3)
+write.csv(results3, file="Teste de homogeneidade- Cor ou raca vs EPISIOTOMIA")
+```
+
+
+```{r}
+F4 <- svychisq(~Acompanhada+S119, desenho_pos, statistic="F")
+X24 <- svychisq(~Acompanhada+S119, desenho_pos, statistic="Chisq")
+WALD4 <- svychisq(~Acompanhada+S119, desenho_pos, statistic="Wald")
+
+
+results4 <- data.frame(
+  Metodo= c("F","Chisq","Wald"),
+  Estatistica= c(F4$statistic,X24$statistic, WALD4$statistic),
+  Valorp = c(F4$p.value, X24$p.value, WALD4$p.value ))
+kable(results4 ,digits= 3)
+write.csv(results4, file="Teste de homogeneidade- acompanhada vs EPISIOTOMIA")
+```
+
+
